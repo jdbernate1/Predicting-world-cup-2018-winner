@@ -1,0 +1,608 @@
+---
+title: "PredicciÃ³n Ganador Mundial"
+author: "Juan Diego Bernate V"
+date: "8 de junio de 2018"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+PREDICCIÓN MUNDIAL
+El objetivo de esta publicación es predecir el ganador del mundial basados en los resultados de los partidos desde 1872 al 2017.
+ Para lograrlo utilizaremos e machine learning, en R.
+ 
+ 
+Lo primero que vamos hacer es subir el dataset de partidos historicos, el cual esta disponible en Kaggle en el siguiente vinculo https://www.kaggle.com/martj42/international-football-results-from-1872-to-2017/data
+
+
+```{r}
+ds<-read.csv("results.csv",header = T)
+```
+
+```{r, echo=FALSE}
+head(ds)
+```
+
+Eliminamos los empates para evitar las desviaciones que podrian tener por ser partidos de prueba, de igual modo vamos a tomar solo los encuentros de 1980 en adelanto para agilizar el dataset y evitar el cambio de nombre de algunos equipos. Hacemos una columna que identifique si el ganador fue el equipo local o el visitante.
+
+Para lograr lo mencionado, se crea una columna llamada empate, a la cual se le asigna un 1 si el score es igual y 0 si es diferente, luego filtramos las filas de todo el dataset que tienen 0 en la columna empate. Se hace lo mismo con las filas que tienen valor "Friendly" en la columna tournament. Se añade la columna ganador en la cual si home score es mayor, asigna home team, si no away team. Para la fecha se utiliza la misma logica de filtrado, todas las filas que tengan fecha superior a la indicada.
+
+
+```{r }
+ds$empate<-ifelse(ds$home_score==ds$away_score,1,0)
+ds<-ds[ds$empate==0,]
+ds<-ds[!ds$tournament=="Friendly",]
+ds$ganador<-ifelse(ds$home_score>ds$away_score,as.character(ds$home_team),as.character(ds$away_team))
+
+ds$date<-format(as.Date(ds$date),"%Y/%m/%d")
+ds<-ds[ds$date>1980/01/01,]
+```
+
+A continuación vamos a cargar el dataset de los equipos que han participado en mundiales, de los cuales podemos obtener alguna data en FIFA acerca de su performance en pasados mundiales. Les comparto el csv.
+https://drive.google.com/file/d/1PR0d2ziw8_sSJUHA7vovmX3fij0bnjpQ/view?usp=sharing
+Filtramos los equipos que estan incluidos en el csv creando un nuevo dataset ds1.
+
+```{r }
+equipos<-read.csv("equipos.csv",header=T,sep=";")
+
+ds1<-ds[ds$home_team%in%equipos$dataset,]
+ds1<-ds1[ds1$away_team%in%equipos$dataset,]
+```
+
+Vamos a crear una columna con el porcentaje de victorias por equipo. Aclaro, seguramente hay metodos más agiles que el utilizado.
+
+
+```{r }
+z<-table(ds1$ganador)
+z<-data.frame(z)
+x<-table(ds1$home_team)
+y<-table(ds1$away_team)
+x<-data.frame(x)
+y<-data.frame(y) 
+xy<-merge(y,x,by ="Var1",all.x = T)
+
+xy$totalpartidos<-as.integer(xy$Freq.x+xy$Freq.y)
+
+xy<-merge(xy,z,by="Var1",all.x = T)
+xy<-xy[complete.cases(xy),]
+xy$porcenVict<-xy$Freq/xy$totalpartidos
+
+
+```
+Otra de las columnas para el dataset final será la cantidad de goles a favor y en contra. A continuación creamos las variables mencionadas y unificamos con la tabla de equipos para consolidar el performance por equipo. Eliminamos objetos y columnas intermediass para evitar confusiones.
+
+
+
+
+```{r }
+
+a<-data.frame(aggregate(home_score~home_team, data=ds1, FUN = "sum"))
+b<-data.frame(aggregate(away_score~away_team, data=ds1, FUN = "sum"))
+colnames(a)<-c("team","goles")
+colnames(b)<-c("team","goles")
+ab<-merge(a,b,by ="team",all.x = T)
+ab$golesfavor<-as.integer(ab$goles.x+ab$goles.y)
+
+c<-data.frame(aggregate(away_score~home_team, data=ds1, FUN = "sum"))
+d<-data.frame(aggregate(home_score~away_team, data=ds1, FUN = "sum"))
+colnames(c)<-c("team","golesC")
+colnames(d)<-c("team","golesC")
+cd<-merge(c,d,by ="team",all.x = T)
+cd$golescontra<-as.integer(cd$golesC.x+cd$golesC.y)
+
+golesfavor<-ab
+porcenVict<-xy
+golescontra<-cd
+rm(x,y,z,ab,xy,a,b,c,d,cd)
+
+golescontra$golesC.x<-NULL
+golescontra$golesC.y<-NULL
+golesfavor$goles.x<-NULL
+golesfavor$goles.y<-NULL
+porcenVict$Freq.x<-NULL
+porcenVict$Freq.y<-NULL
+colnames(porcenVict)<-c("team","totalpartidos","victorias","%victo")
+
+est<-merge(golescontra,golesfavor,by ="team",all.x = T)
+est<-merge(est,porcenVict,by="team",all.x = T)
+
+colnames(equipos)[1]<-"team"
+equipos<-merge(equipos,est,by="team",all.x=T)
+
+equipos$GF_partido<-equipos$golesfavor/equipos$totalpartidos
+equipos$GC_partido<-equipos$golescontra/equipos$totalpartidos
+
+rm(golescontra,golesfavor,porcenVict)
+rm(est)
+```
+La tabla de performance quedo de las siguiente manera
+
+```{r,echo=TRUE }
+head(equipos)
+```
+Añadimos la tabla de equipos al historico de partidos, ordenamos el dataset por fecha, eliminamos algunas variables que no vamos a usar y organizamos las columnas que se movieron por el merge. 
+
+```{r }
+colnames(ds1)[2]<-"team"
+ds2<-merge(ds1,equipos,by="team",all.x = T)
+colnames(equipos)[1]<-"team2"
+colnames(ds2)[3]<-"team2"
+ds2<-merge(ds2,equipos,by="team2",all.x = T)
+
+ds2$ganador<-NULL
+ds2<-ds2[order(ds2$date),]
+ds2$tournament<-NULL
+ds2$city<-NULL
+ds2$country<-NULL
+ds2$neutral<-NULL
+ds2$empate<-NULL
+ds2$idmatch<-seq.int(nrow(ds2))
+
+ds2<-ds2[,c(3,2,1,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40)]
+
+colnames(ds2)<-c("fecha","team","team2","home_score","away_score","partic","rend.mundiales","campeonatos",
+                 "subcampeonatos","tercer.lugar","cuarto.lugar","cuartos.final","oct.final","prim.ronda","RankFifa",
+                 "golescontra","golesfavor","totalpartido","victorias","porc.victo","gf.part","gc.part","partic2",
+                 "rend.mundiales2","campeonatos2","subcampeonatos2","tercer.lugar2","cuarto.lugar2","cuartos.final2",
+                 "oct.final2","prim.ronda2","RankFifa2","golescontra2","golesfavor2","totalpartido2","victorias2",
+                 "porc.victo2","gf.part2","gc.part2","idmatch")  
+
+```
+El dataset ya esta casi listo para empezar a entrenar y predecir. VAmos a añadir la clase, la cual sera la variable a predecir, 1 si gana el equipo local, desde ahora a, y 0 si gana el equipo visitante, desde ahora b. También vamos revisar que las variables esten en el formato correcto.
+Importante que la case sea un Factor.
+
+
+```{r,echo= TRUE}
+ds2$clase<-ifelse(ds2$home_score>ds2$away_score,1,0)
+
+ds2$clase<-as.factor(ds2$clase)
+ds2$rend.mundiales<-as.numeric(ds2$rend.mundiales)
+ds2$rend.mundiales2<-as.numeric(ds2$rend.mundiales2)
+
+sapply(ds2,function(x) class(x))
+
+
+```
+Ahora, el dataset ya esta listo. Vamos a separarlo en 2 (80-20). La porcion más grande esta destinada para entrenar el modelo y el restante sera donde probaremos los resultados.
+Llamamos las librerias contienen los modelos que vamos a utilizar.
+
+
+```{r }
+train<-ds2[ds2$idmatch<3100,]
+test<-ds2[ds2$idmatch>3099,]
+
+#install.packages("rpart")
+library(rpart)
+#install.packages("rpart.plot")
+library(rpart.plot)
+#install.packages("caret")
+library(caret)
+#install.packages("randomForest")
+library(randomForest)
+#install.packages("e1071")
+library(e1071)
+
+rm(ds,ds1)
+
+```
+Iniciemos con un arbol de decisión sencillo, predecimos y medimos la precisión de la predicción.
+
+
+```{r }
+modAD<-rpart(clase ~ partic+rend.mundiales+campeonatos+subcampeonatos+tercer.lugar+cuarto.lugar+cuartos.final+oct.final
+             +prim.ronda+RankFifa+porc.victo+gf.part+gc.part+partic2+rend.mundiales2+campeonatos2+subcampeonatos2+
+               tercer.lugar2+cuarto.lugar2+cuartos.final2+oct.final2+prim.ronda2+RankFifa2+porc.victo2+gf.part2+gc.part2,
+             data=train)
+
+predAD<-predict(modAD,test, type="class")
+modAD
+rpart.plot(modAD)
+
+resulAD<-data.frame(test$clase,predAD)
+table(resulAD)
+(513+109)/892
+```
+El arbol de decisión tuvo una precisión del 69,7%. Procedemos a probar con algunos cambios para verificar si mejora
+
+```{r }
+modAD2<-rpart(clase ~ partic+rend.mundiales+campeonatos+subcampeonatos+tercer.lugar+cuarto.lugar+cuartos.final+oct.final
+             +prim.ronda+RankFifa+porc.victo+gf.part+gc.part+partic2+rend.mundiales2+campeonatos2+subcampeonatos2+
+               tercer.lugar2+cuarto.lugar2+cuartos.final2+oct.final2+prim.ronda2+RankFifa2+porc.victo2+gf.part2+gc.part2,
+             data=train,control= rpart.control(minsplit = 5))
+
+predAD2<-predict(modAD2,test, type="class")
+modAD
+rpart.plot(modAD2)
+
+resulAD2<-data.frame(test$clase,predAD2)
+table(resulAD)
+(513+109)/892
+```
+No hubo mejoria. Vamos a probar random forest
+
+```{r }
+modRF<-randomForest(clase ~ partic+rend.mundiales+campeonatos+subcampeonatos+tercer.lugar+cuarto.lugar+cuartos.final
+                    +oct.final+prim.ronda+RankFifa+porc.victo+gf.part+gc.part+partic2+rend.mundiales2+campeonatos2+
+                      subcampeonatos2+tercer.lugar2+cuarto.lugar2+cuartos.final2+oct.final2+prim.ronda2+RankFifa2+
+                      porc.victo2+gf.part2+gc.part2,data=train,ntree=10000,sampsize=200,importance=TRUE)
+
+predRF<-predict(modRF,test, type="class")
+
+resulRF<-data.frame(test$clase,predRF)
+table(resulRF)
+(145+477)/892
+
+```
+El random forest tuvo una precisión del 69,7%. Procedemos a probar con algunos cambios para verificar si mejora
+```{r }
+modRFA<-randomForest(clase ~ partic+rend.mundiales+campeonatos+subcampeonatos+tercer.lugar+cuarto.lugar+cuartos.final
+                    +oct.final+prim.ronda+RankFifa+porc.victo+gf.part+gc.part+partic2+rend.mundiales2+campeonatos2+
+                      subcampeonatos2+tercer.lugar2+cuarto.lugar2+cuartos.final2+oct.final2+prim.ronda2+RankFifa2+
+                      porc.victo2+gf.part2+gc.part2,data=train,ntree=10000,sampsize=100,importance=TRUE)
+
+predRFA<-predict(modRFA,test, type="class")
+
+resulRFA<-data.frame(test$clase,predRFA)
+table(resulRFA)
+(142+490)/892
+```
+Mejoro un poco el modelo, con 70,8%. Otro intento para ver si mejora más.
+```{r }
+modRF2<-randomForest(clase ~ partic+rend.mundiales+campeonatos+subcampeonatos+tercer.lugar+cuarto.lugar+cuartos.final
+                    +oct.final+prim.ronda+RankFifa+porc.victo+gf.part+gc.part+partic2+rend.mundiales2+campeonatos2+
+                      subcampeonatos2+tercer.lugar2+cuarto.lugar2+cuartos.final2+oct.final2+prim.ronda2+RankFifa2+
+                      porc.victo2+gf.part2+gc.part2,data=train,ntree=10000,sampsize=50,importance=TRUE)
+
+predRF2<-predict(modRF2,test, type="class")
+
+resulRF2<-data.frame(test$clase,predRF2)
+table(resulRF2)
+(143+495)/892
+```
+Mejoro, 71,5%. Otra prueba.
+
+
+```{r }
+modRF3<-randomForest(clase ~ partic+rend.mundiales+campeonatos+subcampeonatos+tercer.lugar+cuarto.lugar+cuartos.final
+                    +oct.final+prim.ronda+RankFifa+porc.victo+gf.part+gc.part+partic2+rend.mundiales2+campeonatos2+
+                      subcampeonatos2+tercer.lugar2+cuarto.lugar2+cuartos.final2+oct.final2+prim.ronda2+RankFifa2+
+                      porc.victo2+gf.part2+gc.part2,data=train,ntree=50000,sampsize=20,importance=TRUE)
+
+predRF3<-predict(modRF3,test, type="class")
+
+resulRF3<-data.frame(test$clase,predRF3)
+table(resulRF3)
+
+(129+509)/892
+
+```
+No mejoro. Vamos a probar con caret. Usamos  grid para mejorar.
+
+```{r }
+gbmGrid <-  expand.grid(interaction.depth = c(1,5,9),
+                        n.trees = (1:10)*5,
+                        shrinkage = c(0.1,0.2),
+                        n.minobsinnode = c(30,40))
+
+modcaret <- train(clase ~ partic+rend.mundiales+campeonatos+subcampeonatos+tercer.lugar+cuarto.lugar+cuartos.final+oct.final
+                  +prim.ronda+RankFifa+porc.victo+gf.part+gc.part+partic2+rend.mundiales2+campeonatos2+subcampeonatos2+
+                    tercer.lugar2+cuarto.lugar2+cuartos.final2+oct.final2+prim.ronda2+RankFifa2+porc.victo2+gf.part2+
+                    gc.part2,data=train,method = "gbm",verbose = FALSE,tuneGrid = gbmGrid)
+
+predcaret<-predict(modcaret,test, type="raw")
+resulcaret<-data.frame(test$clase,predcaret)
+table(resulcaret)
+(149+484)/892
+
+```
+70,9%  vamor a añadir el fit control
+
+```{r }
+gbmGrid2 <-  expand.grid(interaction.depth = c(1,5,9),
+                        n.trees = (1:100)*5,
+                        shrinkage = c(0.1,0.2),
+                        n.minobsinnode = c(30,40,50))
+
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10, # genera un dataset dividido en 10 k
+  repeats = 1) # genera 3 divisiones de k = 10
+
+
+modcaret2 <- train(clase ~ partic+rend.mundiales+campeonatos+subcampeonatos+tercer.lugar+cuarto.lugar+cuartos.final+
+                     oct.final+prim.ronda+RankFifa+porc.victo+gf.part+gc.part+partic2+rend.mundiales2+campeonatos2+
+                     subcampeonatos2+tercer.lugar2+cuarto.lugar2+cuartos.final2+oct.final2+prim.ronda2+RankFifa2+
+                     porc.victo2+gf.part2+gc.part2,data=train,
+                  method = "gbm",
+                  verbose = FALSE,
+                  trControl = fitControl,
+                  tuneGrid = gbmGrid)
+predcaret2<-predict(modcaret2,test, type="raw")
+resulcaret2<-data.frame(test$clase,predcaret2)
+table(resulcaret2)
+(142+491)/892
+
+```
+70,96% el gbm con grid y fit. El ganador fue el random Forest. 
+
+Seguimos con la predicción, subimos el dataset con la fase de grupos.
+
+Despues de cargar el csv, lo que se hace es separar las columnas team y team2 a las cuales les asignamos el respectivo vector de performance por equipo
+
+
+```{r }
+
+Fase.Grupos<-read.csv("Ds predecir2.csv",header = T,sep=",")
+Fase.Grupos$idmatch<-seq.int(nrow(Fase.Grupos))
+colnames(Fase.Grupos)[1]<-"team"
+colnames(equipos)[1]<-"team"
+colnames(Fase.Grupos)[2]<-"team2"
+
+team<-data.frame(Fase.Grupos$team,Fase.Grupos$idmatch,Fase.Grupos$Grupo)
+colnames(team)<-c("team","idmatch","Grupo")
+team<-merge(team,equipos,by="team",all.x = T)
+team<-team[order(team$idmatch),]
+
+colnames(team)
+colnames(team)<-c("team","idmatch","Grupo","partic","rend.mundiales","campeonatos","subcampeonatos","tercer.lugar",
+                  "cuarto.lugar","cuartos.final","oct.final","prim.ronda","RankFifa","golescontra","golesfavor",
+                  "totalpartido","victorias","porc.victo","gf.part","gc.part")
+
+team2<-data.frame(Fase.Grupos$team2,Fase.Grupos$idmatch,Fase.Grupos$Grupo)
+colnames(team2)<-c("team2","idmatch","Grupo")
+colnames(equipos)[1]<-"team2"
+team2<-merge(team2,equipos,by="team2",all.x = T)
+team2<-team2[order(team2$idmatch),]
+
+colnames(team2)<-c("team2","idmatch","Grupo","partic2","rend.mundiales2","campeonatos2","subcampeonatos2","tercer.lugar2",
+                  "cuarto.lugar2","cuartos.final2","oct.final2","prim.ronda2","RankFifa2","golescontra2","golesfavor2",
+                  "totalpartido2","victorias2","porc.victo2","gf.part2","gc.part2")
+
+Fase.Grupos<-cbind(team,team2)
+
+colnames(Fase.Grupos)[3]<-"Grupos"
+Fase.Grupos$Grupo<-NULL
+colnames(Fase.Grupos)
+
+Fase.Grupos<-Fase.Grupos[,c(1,21,22,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39)]
+Fase.Grupos$idmatch.1<-NULL
+
+sapply(Fase.Grupos,function(x) class(x))
+
+Fase.Grupos$rend.mundiales<-as.numeric(Fase.Grupos$rend.mundiales)
+Fase.Grupos$rend.mundiales2<-as.numeric(Fase.Grupos$rend.mundiales2)
+
+```
+
+El dataset para predecir ya queda listo. Corremos la predicción de la fase de grupo
+
+
+```{r }
+predFG2<-predict(modRF2,Fase.Grupos, type="prob")
+resultFG2<-data.frame(Fase.Grupos$idmatch,predFG2)
+
+resultFG2$team<-Fase.Grupos$team
+resultFG2$team2<-Fase.Grupos$team2
+resultFG2$team2<-Fase.Grupos$team2
+colnames(resultFG2)[1]<-"idmatch"
+
+resultFG2$ganador<-ifelse(resultFG2$X1>resultFG2$X0,as.character(resultFG2$team),as.character(resultFG2$team2))
+
+resultFG2$grupo<-Fase.Grupos$Grupos
+resultFG2$puntos<-3
+
+resultFG2$ganador<-ifelse(resultFG2$X1>resultFG2$X0,as.character(resultFG2$team),as.character(resultFG2$team2))
+
+puntos2<-data.frame(aggregate(resultFG2$puntos~resultFG2$grupo+resultFG2$ganador,FUN = "sum"))
+
+
+
+puntos2[order(puntos2$resultFG2.grupo,puntos2$resultFG2.puntos,decreasing = TRUE),]
+
+write.csv(puntos2,"puntosgrupos.csv")
+```
+COn el write csv descargamos el dataset con los puntos por grupo. Organizamo y volvemos a cargar para predecir la siguiente fase. Cuando empatan en puntos, se define el clasificado por la suma de probabilidades.
+https://drive.google.com/file/d/1r4hZFOeY_9RYYVJnpk-wnVsX2aJ80YuZ/view?usp=sharing en este link se encuentra el csv con los encuentros de segunda fase. Cargamos la segunda ronda y ejecutamos el mismo proceso de la fase de grupos
+```{r }
+segundaron<-read.csv("segundaronda.csv",header = T,sep=";")
+
+segundaron$idmatch<-seq.int(nrow(segundaron))
+
+colnames(equipos)[1]<-"team"
+team<-data.frame(segundaron$Team,segundaron$idmatch)
+colnames(team)<-c("team","idmatch")
+team<-merge(team,equipos,by="team",all.x = T)
+team<-team[order(team$idmatch),]
+
+colnames(team)<-c("team","idmatch","partic","rend.mundiales","campeonatos","subcampeonatos","tercer.lugar",
+                  "cuarto.lugar","cuartos.final","oct.final","prim.ronda","RankFifa","golescontra","golesfavor",
+                  "totalpartido","victorias","porc.victo","gf.part","gc.part")
+
+team2<-data.frame(segundaron$Team2,segundaron$idmatch)
+colnames(team2)<-c("team2","idmatch")
+colnames(equipos)[1]<-"team2"
+team2<-merge(team2,equipos,by="team2",all.x = T)
+team2<-team2[order(team2$idmatch),]
+
+colnames(team2)<-c("team2","idmatch","partic2","rend.mundiales2","campeonatos2","subcampeonatos2","tercer.lugar2",
+                   "cuarto.lugar2","cuartos.final2","oct.final2","prim.ronda2","RankFifa2","golescontra2","golesfavor2",
+                   "totalpartido2","victorias2","porc.victo2","gf.part2","gc.part2")
+
+segundaron<-cbind(team,team2)
+
+segundaron<-segundaron[,c(1,20,2,21,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38)]
+segundaron$idmatch.1<-NULL
+
+#prediccion segunda ronda
+sapply(segundaron,function(x) class(x))
+
+segundaron$rend.mundiales<-as.numeric(segundaron$rend.mundiales)/100
+segundaron$rend.mundiales2<-as.numeric(segundaron$rend.mundiales2)/100
+
+pred2rd<-predict(modRF2,segundaron, type="prob")
+result2rd<-data.frame(segundaron$idmatch,pred2rd)
+
+result2rd$team<-segundaron$team
+result2rd$team2<-segundaron$team2
+colnames(result2rd)[1]<-"idmatch"
+
+
+result2rd<-result2rd[,c(1,4,5,2,3)]
+result2rd$ganador<-ifelse(result2rd$X1>result2rd$X0,as.character(result2rd$team),as.character(result2rd$team2))
+result2rd
+
+
+```
+En el ultimo vector se pueden ver los clasificados a las siguiente ronda. Hacemos lo mismo, creamos el csv, organizamos los cruces y volvemos a cargar.
+```{r }
+write.csv(result2rd,"Octavo.csv")
+
+octavos<-read.csv("octavos.csv",header = T,sep=";")
+
+octavos$idmatch<-seq.int(nrow(octavos))
+
+colnames(equipos)[1]<-"team"
+team<-data.frame(octavos$team,octavos$idmatch)
+colnames(team)<-c("team","idmatch")
+team<-merge(team,equipos,by="team",all.x = T)
+team<-team[order(team$idmatch),]
+
+colnames(team)<-c("team","idmatch","partic","rend.mundiales","campeonatos","subcampeonatos","tercer.lugar",
+                  "cuarto.lugar","cuartos.final","oct.final","prim.ronda","RankFifa","golescontra","golesfavor",
+                  "totalpartido","victorias","porc.victo","gf.part","gc.part")
+
+team2<-data.frame(octavos$team2,octavos$idmatch)
+colnames(team2)<-c("team2","idmatch")
+colnames(equipos)[1]<-"team2"
+team2<-merge(team2,equipos,by="team2",all.x = T)
+team2<-team2[order(team2$idmatch),]
+
+colnames(team2)<-c("team2","idmatch","partic2","rend.mundiales2","campeonatos2","subcampeonatos2","tercer.lugar2",
+                   "cuarto.lugar2","cuartos.final2","oct.final2","prim.ronda2","RankFifa2","golescontra2","golesfavor2",
+                   "totalpartido2","victorias2","porc.victo2","gf.part2","gc.part2")
+octavos<-cbind(team,team2)
+
+octavos<-octavos[,c(1,20,2,21,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38)]
+octavos$idmatch.1<-NULL
+
+octavos$rend.mundiales<-as.numeric(octavos$rend.mundiales)/100
+octavos$rend.mundiales2<-as.numeric(octavos$rend.mundiales2)/100
+
+pred8vo<-predict(modRF2,octavos, type="prob")
+result8vo<-data.frame(octavos$idmatch,pred8vo)
+colnames(result8vo)[1]<-"idmatch"
+
+result8vo$team<-octavos$team
+result8vo$team2<-octavos$team2
+colnames(result8vo)[1]<-"idmatch"
+result8vo<-result8vo[,c(1,4,5,2,3)]
+result8vo$ganador<-ifelse(result8vo$X1>result8vo$X0,as.character(result8vo$team),as.character(result8vo$team2))
+
+
+result8vo
+```
+Repetimos el procedimiento para la siguiente ronda
+```{r }
+semifinales<-read.csv("semifinales.csv",header = T,sep=";")
+semifinales$idmatch<-seq.int(nrow(semifinales))
+
+colnames(equipos)[1]<-"team"
+team<-data.frame(semifinales$team,semifinales$idmatch)
+colnames(team)<-c("team","idmatch")
+team<-merge(team,equipos,by="team",all.x = T)
+team<-team[order(team$idmatch),]
+
+colnames(team)<-c("team","idmatch","partic","rend.mundiales","campeonatos","subcampeonatos","tercer.lugar",
+                  "cuarto.lugar","cuartos.final","oct.final","prim.ronda","RankFifa","golescontra","golesfavor",
+                  "totalpartido","victorias","porc.victo","gf.part","gc.part")
+
+team2<-data.frame(semifinales$team2,semifinales$idmatch)
+colnames(team2)<-c("team2","idmatch")
+colnames(equipos)[1]<-"team2"
+team2<-merge(team2,equipos,by="team2",all.x = T)
+team2<-team2[order(team2$idmatch),]
+
+colnames(team2)<-c("team2","idmatch","partic2","rend.mundiales2","campeonatos2","subcampeonatos2","tercer.lugar2",
+                   "cuarto.lugar2","cuartos.final2","oct.final2","prim.ronda2","RankFifa2","golescontra2","golesfavor2",
+                   "totalpartido2","victorias2","porc.victo2","gf.part2","gc.part2")
+semifinales<-cbind(team,team2)
+
+semifinales<-semifinales[,c(1,20,2,21,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38)]
+semifinales$idmatch.1<-NULL
+
+semifinales$rend.mundiales<-as.numeric(semifinales$rend.mundiales)/100
+semifinales$rend.mundiales2<-as.numeric(semifinales$rend.mundiales2)/100
+
+predsemi<-predict(modRF2,semifinales, type="prob")
+resultsemi<-data.frame(semifinales$idmatch,predsemi)
+colnames(resultsemi)[1]<-"idmatch"
+
+resultsemi$team<-semifinales$team
+resultsemi$team2<-semifinales$team2
+colnames(resultsemi)[1]<-"idmatch"
+resultsemi<-resultsemi[,c(1,4,5,2,3)]
+resultsemi$ganador<-ifelse(resultsemi$X1>resultsemi$X0,as.character(resultsemi$team),as.character(resultsemi$team2))
+
+resultsemi
+```
+Ahora la final, Francia vs España. Repetimos el mismo procedimiento que hemos venido usando.
+```{r }
+final<-read.csv("FINAL.csv",header = T,sep=";")
+final$idmatch<-seq.int(nrow(final))
+
+colnames(equipos)[1]<-"team"
+team<-data.frame(final$team,final$idmatch)
+colnames(team)<-c("team","idmatch")
+team<-merge(team,equipos,by="team",all.x = T)
+team<-team[order(team$idmatch),]
+
+colnames(team)<-c("team","idmatch","partic","rend.mundiales","campeonatos","subcampeonatos","tercer.lugar",
+                  "cuarto.lugar","cuartos.final","oct.final","prim.ronda","RankFifa","golescontra","golesfavor",
+                  "totalpartido","victorias","porc.victo","gf.part","gc.part")
+
+team2<-data.frame(final$team2,final$idmatch)
+colnames(team2)<-c("team2","idmatch")
+colnames(equipos)[1]<-"team2"
+team2<-merge(team2,equipos,by="team2",all.x = T)
+team2<-team2[order(team2$idmatch),]
+
+colnames(team2)<-c("team2","idmatch","partic2","rend.mundiales2","campeonatos2","subcampeonatos2","tercer.lugar2",
+                   "cuarto.lugar2","cuartos.final2","oct.final2","prim.ronda2","RankFifa2","golescontra2","golesfavor2",
+                   "totalpartido2","victorias2","porc.victo2","gf.part2","gc.part2")
+final<-cbind(team,team2)
+
+final<-final[,c(1,20,2,21,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38)]
+final$idmatch.1<-NULL
+
+final$rend.mundiales<-as.numeric(final$rend.mundiales)/100
+final$rend.mundiales2<-as.numeric(final$rend.mundiales2)/100
+
+predFI<-predict(modRF2,final, type="prob")
+resultFI<-data.frame(final$idmatch,predFI)
+colnames(resultFI)[1]<-"idmatch"
+
+resultFI$team<-final$team
+resultFI$team2<-final$team2
+colnames(resultFI)[1]<-"idmatch"
+resultFI<-resultFI[,c(1,2,3,5,4)]
+resultFI$ganador<-ifelse(resultFI$X1>resultFI$X0,as.character(resultFI$team),as.character(resultFI$team2))
+
+resultFI
+
+
+```
+ Francia Campeón. Este es mi primer proyecto de machine learning, así que es suceptible de muchas mejoras, entre ellas:
+ 1) Hay algunas desviaciones por considerar la data desde el 1980, habría que incluir alguna variable que ajuste los resultados a periodos más recientes.
+ 2) La no inclusión de los empates hace que los partidos de las fases finales tengan probabilidades muy parejas.
+ 3)Se podrian añadir más variables descriptivas de los equipos como por ejemplo la info de FIFA (el juego) de los equipos y jugadores.
+ 
+ Muchas gracias por su tiempo
+ 
+
+
+
+
+
